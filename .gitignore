@@ -5,3 +5,5 @@
 node_modules/@next/swc-darwin-arm64/next-swc.darwin-arm64.node
 .next/cache/.tsbuildinfo
 /.next
+/node_modules
+/node_modules
