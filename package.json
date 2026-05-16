@@ -21,7 +21,7 @@
   "devDependencies": {
     "@types/canvas-confetti": "^1.6.4",
     "@types/node": "^20.11.0",
-    "@types/react": "^18.2.48",
+    "@types/react": "18.3.28",
     "@types/react-dom": "^18.2.18",
     "autoprefixer": "^10.4.17",
     "tailwindcss": "^3.4.1",
