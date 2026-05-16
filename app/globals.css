@@ -55,10 +55,25 @@ body {
 
 /* 敏感區域模糊 */
 .sensitive-blur {
-  filter: blur(12px);
+  filter: blur(6px);
   transition: filter 0.2s ease;
 }
 
 .sensitive-blur.reveal {
+  filter: none;
+}
+
+.sensitive-blur__partial {
+  position: relative;
+}
+
+.sensitive-blur__partial::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  filter: blur(6px);
+}
+
+.sensitive-blur__partial.reveal::after {
   filter: none;
 }

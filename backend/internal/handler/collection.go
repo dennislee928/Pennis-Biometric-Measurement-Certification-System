@@ -15,7 +15,7 @@ import (
 const (
 	labelRecognized    = "recognized"
 	labelNotRecognized = "not_recognized"
-	maxFileSize        = 10 << 20 // 10MB
+	maxFileSize        = 2 << 20 // 2MB
 )
 
 // SubmitCollection 接收前端上傳的 ROI 圖與標籤，存到 COLLECTION_STORAGE_PATH/{label}/ 下
@@ -38,7 +38,25 @@ func SubmitCollection(collectionRoot string) gin.HandlerFunc {
 			return
 		}
 		if file.Size > maxFileSize {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "image too large"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "image must be smaller than 2MB"})
+			return
+		}
+
+		f, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			return
+		}
+		header := make([]byte, 8)
+		if _, err := f.Read(header); err != nil {
+			f.Close()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image header"})
+			return
+		}
+		f.Close()
+
+		if !isValidImageHeader(header) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "image must be PNG or JPEG format"})
 			return
 		}
 
@@ -61,4 +79,20 @@ func SubmitCollection(collectionRoot string) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{"ok": true, "path": name})
 	}
+}
+
+func isValidImageHeader(header []byte) bool {
+	if len(header) < 8 {
+		return false
+	}
+	// PNG: 89 50 4E 47 0D 0A 1A 0A
+	if header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 &&
+		header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A {
+		return true
+	}
+	// JPEG: FF D8 FF
+	if header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
+		return true
+	}
+	return false
 }

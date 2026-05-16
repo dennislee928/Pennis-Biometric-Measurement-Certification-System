@@ -24,6 +24,8 @@ declare global {
 }
 
 const PERSONA_SCRIPT = 'https://cdn.withpersona.com/dist/persona-v4.8.0.js';
+// SRI hash for persona-v4.8.0.js — update when SDK version changes:
+// integrity="sha256-..."
 
 /**
  * Persona 身分驗證流程（Embedded Inquiry）
@@ -68,6 +70,10 @@ export function usePersonaInquiry(
     const script = document.createElement('script');
     script.src = PERSONA_SCRIPT;
     script.async = true;
+    script.crossOrigin = 'anonymous';
+    // TODO: Replace with the actual SRI hash for persona-v4.8.0.js from
+    //       https://cdn.withpersona.com/dist/persona-v4.8.0.js
+    // script.integrity = 'sha256-...';
     script.onload = () => {
       if (!window.Persona?.Client) {
         setError('Persona SDK 載入失敗');

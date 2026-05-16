@@ -42,6 +42,9 @@ export async function signPayload(
 /**
  * 生成認證證書 JSON
  * secretKey 實務上應由後端提供或透過安全通道取得，此處為示範用
+ * @deprecated This function signs certificates on the frontend using HMAC-SHA256 and is
+ *             for development/demonstration only. In production, all signing must happen
+ *             server-side via POST /api/certificates.
  */
 export async function createCertificate(
   inquiryId: string,
@@ -71,7 +74,14 @@ export async function createCertificate(
  * 將證書轉為可下載的 JSON 檔案
  */
 export function downloadCertificateAsJson(cert: CertificatePayload): void {
-  const blob = new Blob([JSON.stringify(cert, null, 2)], {
+  if (process.env.NODE_ENV === 'development') {
+    console.warn(
+      '[certificationProvider] downloadCertificateAsJson: frontend certificate creation is for development only. ' +
+        'In production, signatures must be created server-side.'
+    );
+  }
+  const { signature: _sig, nonce: _nonce, ...rest } = cert;
+  const blob = new Blob([JSON.stringify(rest, null, 2)], {
     type: 'application/json',
   });
   const url = URL.createObjectURL(blob);

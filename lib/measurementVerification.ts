@@ -1,10 +1,3 @@
-/**
- * 測量區 ML 辨識介面
- * 若設定 NEXT_PUBLIC_MEASUREMENT_RECOGNITION_MODEL_URL 或 window.__MEASUREMENT_RECOGNITION_MODEL__，
- * 可載入 TensorFlow.js GraphModel 對 ROI 做推論；否則回傳 { recognized: true } 不阻擋流程。
- * 模型假設：輸入 224×224 RGB、數值 [0,1]；輸出為二元分類 [未辨識, 已辨識]，取 result[1] 為信心度。
- */
-
 import * as tf from '@tensorflow/tfjs';
 
 const MODEL_INPUT_SIZE = 224;
@@ -24,11 +17,45 @@ function getModelUrl(): string | undefined {
 }
 
 let model: tf.GraphModel | null = null;
+let inferenceWorker: Worker | null = null;
 
-/**
- * 對測量區 ROI 執行 ML 辨識
- * @param roiImageData 裁剪後的測量區域圖像（來自 getMeasurementRoi）
- */
+function createInferenceWorker(): Worker | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const worker = new Worker(new URL('./workers/inference.worker.ts', import.meta.url));
+    return worker;
+  } catch {
+    return null;
+  }
+}
+
+export async function runRecognitionModelInWorker(roiImageData: ImageData): Promise<RecognitionResult> {
+  if (!inferenceWorker) {
+    inferenceWorker = createInferenceWorker();
+  }
+  if (!inferenceWorker) {
+    return runRecognitionModel(roiImageData);
+  }
+
+  return new Promise((resolve) => {
+    const handler = (e: MessageEvent) => {
+      inferenceWorker!.removeEventListener('message', handler);
+      if (e.data.error) {
+        console.error('Worker inference error:', e.data.error);
+        resolve(runRecognitionModel(roiImageData));
+        return;
+      }
+      resolve(e.data.result as RecognitionResult);
+    };
+    inferenceWorker.addEventListener('message', handler);
+    inferenceWorker.postMessage({ imageData: roiImageData, type: 'recognition' }, [roiImageData.data.buffer]);
+    setTimeout(() => {
+      inferenceWorker.removeEventListener('message', handler);
+      resolve(runRecognitionModel(roiImageData));
+    }, 10000);
+  });
+}
+
 export async function runRecognitionModel(roiImageData: ImageData): Promise<RecognitionResult> {
   if (typeof window === 'undefined') {
     return { recognized: true };
@@ -55,7 +82,6 @@ export async function runRecognitionModel(roiImageData: ImageData): Promise<Reco
       return prediction.dataSync();
     });
 
-    // 二元分類：result[0] = 未辨識, result[1] = 已辨識（若為單一 sigmoid 則取 result[0]）
     const confidence = result.length > 1 ? result[1] : result[0];
     const recognized = confidence > RECOGNITION_CONFIDENCE_THRESHOLD;
 

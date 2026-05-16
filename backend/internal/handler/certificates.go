@@ -216,6 +216,64 @@ type VerifyRequest struct {
 	Signature   string            `json:"signature"`
 }
 
+func validateMeasurement(m MeasurementResult) error {
+	if m.LengthCm <= 0 || m.LengthCm > 50 {
+		return fmt.Errorf("lengthCm must be between 0 and 50 cm")
+	}
+	if m.Ppm < 50 || m.Ppm > 500 {
+		return fmt.Errorf("ppm must be between 50 and 500")
+	}
+	if m.Timestamp > time.Now().UnixMilli()+5000 {
+		return fmt.Errorf("timestamp cannot be in the future")
+	}
+	return nil
+}
+
+func DeleteCertificate(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userIDStr, _ := c.Get(middleware.UserIDKey)
+		userID, err := uuid.Parse(userIDStr.(string))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+			return
+		}
+		idStr := c.Param("id")
+		certID, err := uuid.Parse(idStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid certificate id"})
+			return
+		}
+
+		var cert model.Certificate
+		if err := db.Where("id = ? AND user_id = ?", certID, userID).First(&cert).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "certificate not found"})
+				return
+			}
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+			return
+		}
+
+		if err := db.Delete(&cert).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+			return
+		}
+
+		audit := model.AuditLog{
+			Action:     "certificate.deleted",
+			EntityType: strPtr("certificate"),
+			EntityID:   strPtr(cert.ID.String()),
+			UserID:     &userID,
+			InquiryID:  &cert.InquiryID,
+			Payload:    []byte(fmt.Sprintf(`{"inquiry_id":"%s"}`, cert.InquiryID)),
+			CreatedAt:  time.Now().UTC(),
+		}
+		_ = db.Create(&audit)
+
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
 func VerifyCertificate(hmacSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req VerifyRequest
