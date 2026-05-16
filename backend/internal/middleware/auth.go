@@ -57,22 +57,3 @@ func CORS(origin string) gin.HandlerFunc {
 		c.Next()
 	}
 }
-	}
-	return func(c *gin.Context) {
-		reqOrigin := c.Request.Header.Get("Origin")
-		if reqOrigin != "" {
-			if !allowed[reqOrigin] {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "origin not allowed"})
-				return
-			}
-			c.Header("Access-Control-Allow-Origin", reqOrigin)
-		}
-		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-		c.Next()
-	}
-}

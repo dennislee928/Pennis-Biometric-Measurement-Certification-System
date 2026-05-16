@@ -6,32 +6,27 @@ import {
   getBlurScore,
   getMeasurementRoi,
   validateMeasurementRegion,
-  computeFrameDifference,
   type MeasurementResult,
 } from '@/lib/measurementEngine';
+import { RotationTracker, type RotationState } from '@/lib/rotationTracker';
+import { RotationGuide } from '@/components/RotationGuide';
 import { runRecognitionModel } from '@/lib/measurementVerification';
 import { useI18n } from '@/lib/i18n/context';
 import { Camera, AlertCircle, Loader2 } from 'lucide-react';
 
-const LIVENESS_DURATION_MS = 3000;
-const LIVENESS_SAMPLE_INTERVAL_MS = 220;
-const LIVENESS_MOTION_THRESHOLD = 4;
+const ROTATION_TIMEOUT_MS = 5000;
+const ROTATION_FRAME_INTERVAL_MS = 150;
 
 export type CaptureState = 'idle' | 'live' | 'captured' | 'error';
-export type LivenessPhase = 'idle' | 'capturing' | 'timeout';
+export type LivenessPhase = 'idle' | 'rotating' | 'timeout';
 
 export interface CameraCaptureProps {
   onCapture?: (imageData: ImageData, live: boolean) => void;
   onMeasurementReady?: (result: MeasurementResult) => void;
-  /** 參考卡片框佔畫面寬度比例 (0.2 = 20%) */
   referenceFrameWidthRatio?: number;
-  /** 護照閉合比例 高/寬 (125/88)，不傳則用卡片比例 */
   passportAspect?: number;
-  /** 是否啟用敏感區域模糊 */
   enableBlur?: boolean;
-  /** 最低亮度閾值 */
   minLuminance?: number;
-  /** 最低模糊分數閾值（低於此視為太模糊） */
   minBlurScore?: number;
 }
 
@@ -61,9 +56,9 @@ export function CameraCapture({
   const lastCheckRef = useRef<number>(0);
   const [livenessPhase, setLivenessPhase] = useState<LivenessPhase>('idle');
   const [validationError, setValidationError] = useState<string | null>(null);
-  const previousRoiRef = useRef<ImageData | null>(null);
-  const livenessStartRef = useRef<number>(0);
-  const livenessIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [rotationState, setRotationState] = useState<RotationState | null>(null);
+  const [rotationDirection, setRotationDirection] = useState<'cw' | 'ccw'>('cw');
+  const rotationTrackerRef = useRef<RotationTracker | null>(null);
 
   const stopStream = useCallback(() => {
     if (streamRef.current) {
@@ -128,92 +123,125 @@ export function CameraCapture({
     return () => clearInterval(interval);
   }, [state, checkEnvironment]);
 
-  const clearLivenessInterval = useCallback(() => {
-    if (livenessIntervalRef.current) {
-      clearInterval(livenessIntervalRef.current);
-      livenessIntervalRef.current = null;
-    }
-  }, []);
-
-  const startLiveness = useCallback(() => {
+  const startRotationChallenge = useCallback(() => {
+    const direction = Math.random() > 0.5 ? 'cw' : 'ccw';
+    setRotationDirection(direction);
+    const tracker = new RotationTracker({
+      direction,
+      targetAngleDeg: 30,
+      toleranceDeg: 10,
+      timeoutMs: ROTATION_TIMEOUT_MS,
+    });
+    tracker.start();
+    rotationTrackerRef.current = tracker;
+    setRotationState(tracker.getState());
+    setLivenessPhase('rotating');
     setValidationError(null);
-    setLivenessPhase('capturing');
-    previousRoiRef.current = null;
-    livenessStartRef.current = Date.now();
   }, []);
 
   useEffect(() => {
-    if (livenessPhase !== 'capturing') return;
+    if (livenessPhase !== 'rotating') return;
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || video.readyState < 2) return;
+    if (!video || !canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const tick = () => {
-      if (!video || !canvas || video.readyState < 2) return;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const roi = getMeasurementRoi(imageData);
+    let frameId: number;
+    const startTime = Date.now();
+    let lastProcessTime = 0;
 
-      const elapsed = Date.now() - livenessStartRef.current;
-      if (elapsed > LIVENESS_DURATION_MS) {
-        clearLivenessInterval();
-        setLivenessPhase('timeout');
+    const tick = () => {
+      if (!video || !canvas || video.readyState < 2) {
+        frameId = requestAnimationFrame(tick);
         return;
       }
 
-      const prev = previousRoiRef.current;
-      previousRoiRef.current = roi;
-      if (prev) {
-        const diff = computeFrameDifference(prev, roi);
-        if (diff >= LIVENESS_MOTION_THRESHOLD) {
-          clearLivenessInterval();
-          const finalData = new ImageData(
-            new Uint8ClampedArray(imageData.data),
-            imageData.width,
-            imageData.height
-          );
-          const validation = validateMeasurementRegion(finalData);
-          if (!validation.valid) {
+      const now = Date.now();
+      if (now - lastProcessTime < ROTATION_FRAME_INTERVAL_MS) {
+        frameId = requestAnimationFrame(tick);
+        return;
+      }
+      lastProcessTime = now;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const fullImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const roi = getMeasurementRoi(fullImageData);
+
+      if (now - startTime > ROTATION_TIMEOUT_MS) {
+        setLivenessPhase('timeout');
+        rotationTrackerRef.current?.reset();
+        return;
+      }
+
+      const tracker = rotationTrackerRef.current;
+      if (!tracker) return;
+
+      const s = tracker.track(roi);
+      setRotationState(s);
+
+      if (s.phase === 'complete') {
+        const validation = validateMeasurementRegion(fullImageData);
+        if (!validation.valid) {
+          setValidationError(t('validation.regionInvalid'));
+          setLivenessPhase('idle');
+          rotationTrackerRef.current?.reset();
+          return;
+        }
+        runRecognitionModel(getMeasurementRoi(fullImageData)).then((result) => {
+          if (!result.recognized) {
             setValidationError(t('validation.regionInvalid'));
             setLivenessPhase('idle');
+            rotationTrackerRef.current?.reset();
             return;
           }
-          runRecognitionModel(getMeasurementRoi(finalData)).then((result) => {
-            if (!result.recognized) {
-              setValidationError(t('validation.regionInvalid'));
-              setLivenessPhase('idle');
-              return;
-            }
-            onCapture?.(finalData, true);
-            setState('captured');
-            setLivenessPhase('idle');
-          });
-        }
+          onCapture?.(fullImageData, true);
+          setState('captured');
+          setLivenessPhase('idle');
+          rotationTrackerRef.current?.reset();
+        });
+        return;
       }
+
+      if (s.phase === 'failed') {
+        setLivenessPhase('timeout');
+        rotationTrackerRef.current?.reset();
+        return;
+      }
+
+      frameId = requestAnimationFrame(tick);
     };
 
-    livenessIntervalRef.current = setInterval(tick, LIVENESS_SAMPLE_INTERVAL_MS);
-    return () => clearLivenessInterval();
-  }, [livenessPhase, clearLivenessInterval, onCapture, t]);
+    frameId = requestAnimationFrame(tick);
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [livenessPhase, onCapture, t]);
+
+  const handleCancelRotation = useCallback(() => {
+    rotationTrackerRef.current?.reset();
+    setRotationState(null);
+    setLivenessPhase('idle');
+  }, []);
 
   const handleLivenessRetry = useCallback(() => {
     setLivenessPhase('idle');
     setValidationError(null);
+    setRotationState(null);
   }, []);
 
   const capture = useCallback(() => {
-    startLiveness();
-  }, [startLiveness]);
+    startRotationChallenge();
+  }, [startRotationChallenge]);
 
   const reset = useCallback(() => {
     setState('live');
     setLivenessPhase('idle');
     setValidationError(null);
-    previousRoiRef.current = null;
+    setRotationState(null);
   }, []);
 
   const w = 640;
@@ -223,7 +251,6 @@ export function CameraCapture({
   const refTop = h * 0.15;
   const refBottom = refTop + refW * frameAspect;
 
-  /* 測量框：畫面下方 48% 起、高度 35%、寬度 50% 置中（與 measure page 的 targetRegionHeightPx 對應） */
   const measurementTopRatio = 0.48;
   const measurementHeightRatio = 0.35;
   const measurementWidthRatio = 0.5;
@@ -264,7 +291,17 @@ export function CameraCapture({
                 height: measurementHeight,
               }}
             />
-            {livenessPhase !== 'capturing' && (
+            <div
+              className="pointer-events-auto absolute left-2 top-2 flex gap-3 rounded-md bg-black/50 px-2.5 py-1 text-xs"
+            >
+              <span className={envOk.light ? 'text-green-400' : 'text-amber-400'}>
+                {envOk.light ? t('camera.bright') : t('camera.dark')}
+              </span>
+              <span className={envOk.sharp ? 'text-green-400' : 'text-amber-400'}>
+                {envOk.sharp ? t('camera.sharp') : t('camera.blur')}
+              </span>
+            </div>
+            {livenessPhase !== 'rotating' && (
               <>
                 <div
                   className="camera-overlay__hint"
@@ -286,28 +323,17 @@ export function CameraCapture({
                 </div>
               </>
             )}
-            {livenessPhase === 'capturing' && (
-              <div
-                className="camera-overlay__hint"
-                style={{ left: 8, right: 8, bottom: 24, fontSize: '0.8rem' }}
-              >
-                {t('liveness.prompt')}
-              </div>
+            {livenessPhase === 'rotating' && rotationState && (
+              <RotationGuide
+                state={rotationState}
+                direction={rotationDirection}
+                targetAngle={30}
+                onCancel={handleCancelRotation}
+              />
             )}
           </div>
         )}
       </div>
-
-      {state === 'live' && livenessPhase !== 'capturing' && (
-        <div className="flex items-center gap-4 text-sm">
-          <span className={envOk.light ? 'text-green-600' : 'text-amber-600'}>
-            {envOk.light ? t('camera.bright') : t('camera.dark')}
-          </span>
-          <span className={envOk.sharp ? 'text-green-600' : 'text-amber-600'}>
-            {envOk.sharp ? t('camera.sharp') : t('camera.blur')}
-          </span>
-        </div>
-      )}
 
       {validationError && (
         <div className="w-full rounded-lg bg-amber-50 p-4 text-amber-900 text-sm">
@@ -334,10 +360,12 @@ export function CameraCapture({
         </button>
       )}
 
-      {state === 'live' && livenessPhase === 'capturing' && (
+      {state === 'live' && livenessPhase === 'rotating' && (
         <div className="flex items-center gap-2 text-sm text-slate-600">
           <Loader2 className="h-5 w-5 animate-spin" />
-          {t('liveness.prompt')}
+          {rotationState?.phase === 'complete'
+            ? t('liveness.detected')
+            : t('liveness.prompt')}
         </div>
       )}
 
