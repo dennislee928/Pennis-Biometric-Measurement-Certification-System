@@ -19,7 +19,7 @@ import { getSupabase } from '@/lib/supabase';
 import { useI18n } from '@/lib/i18n/context';
 import { CameraCapture } from '@/components/CameraCapture';
 import { usePersonaInquiry } from '@/components/PersonaInquiry';
-import { Shield, Download, Loader2, CheckCircle } from 'lucide-react';
+import { Shield, Download, Loader2, CheckCircle, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 
 const REFERENCE_FRAME_WIDTH_RATIO = 0.25;
@@ -65,6 +65,13 @@ function roiImageDataToPngBlob(roi: ImageData): Promise<Blob> {
 
 export default function MeasurePage() {
   const { t, locale } = useI18n();
+  const [ageVerified, setAgeVerified] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return sessionStorage.getItem('age_verified') === 'true';
+  });
+  const [ageCheckbox, setAgeCheckbox] = useState(false);
+  const [contentCheckbox, setContentCheckbox] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [step, setStep] = useState<'camera' | 'measure' | 'verify' | 'cert'>('camera');
   const [measurement, setMeasurement] = useState<MeasurementResult | null>(null);
   const [certificate, setCertificate] = useState<CertificatePayload | null>(null);
@@ -176,7 +183,14 @@ export default function MeasurePage() {
     <main className="min-h-screen bg-slate-50 px-4 py-8">
       <nav className="mx-auto mb-6 flex max-w-2xl items-center justify-between text-sm">
         <Link href="/" className="text-slate-600 hover:text-slate-900">{t('nav.home')}</Link>
-        <div className="flex items-center gap-4">
+        <button
+          type="button"
+          className="md:hidden p-1 text-slate-600 hover:text-slate-900"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+        >
+          {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </button>
+        <div className="hidden md:flex items-center gap-4">
           <Link href="/verify" className="text-slate-600 hover:text-slate-900">{t('nav.verify')}</Link>
           <Link href="/certificates" className="text-slate-600 hover:text-slate-900">{t('nav.myCerts')}</Link>
           {session ? (
@@ -189,13 +203,55 @@ export default function MeasurePage() {
           )}
         </div>
       </nav>
+      {mobileMenuOpen && (
+        <div className="mx-auto mb-4 max-w-2xl rounded-lg border border-slate-200 bg-white p-4 shadow-sm md:hidden">
+          <div className="flex flex-col gap-3 text-sm">
+            <Link href="/verify" className="text-slate-600 hover:text-slate-900" onClick={() => setMobileMenuOpen(false)}>{t('nav.verify')}</Link>
+            <Link href="/certificates" className="text-slate-600 hover:text-slate-900" onClick={() => setMobileMenuOpen(false)}>{t('nav.myCerts')}</Link>
+            {session ? (
+              <>
+                <span className="text-slate-500">{session.user?.email}</span>
+                <button type="button" onClick={() => { getSupabase().auth.signOut(); setMobileMenuOpen(false); }} className="text-left text-slate-600 hover:text-slate-900">{t('nav.logout')}</button>
+              </>
+            ) : (
+              <Link href="/login" className="rounded bg-slate-800 px-3 py-1.5 text-center text-white hover:bg-slate-700" onClick={() => setMobileMenuOpen(false)}>{t('nav.login')}</Link>
+            )}
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-2xl space-y-8">
         <header className="text-center">
           <h1 className="text-2xl font-bold text-slate-900">{t('welcome.title')}</h1>
           <p className="mt-2 text-sm text-slate-600">{t('welcome.subtitle')}</p>
         </header>
 
-        {step === 'camera' && (
+        {!ageVerified && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-4 text-lg font-semibold">Age Verification</h2>
+            <p className="mb-4 text-sm text-slate-600">This application contains sensitive content and is intended for adults only.</p>
+            <label className="mb-3 flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={ageCheckbox} onChange={(e) => setAgeCheckbox(e.target.checked)} className="rounded border-slate-300" />
+              I am 18 years or older
+            </label>
+            <label className="mb-4 flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={contentCheckbox} onChange={(e) => setContentCheckbox(e.target.checked)} className="rounded border-slate-300" />
+              I understand this contains sensitive content
+            </label>
+            <button
+              type="button"
+              disabled={!ageCheckbox || !contentCheckbox}
+              onClick={() => {
+                sessionStorage.setItem('age_verified', 'true');
+                setAgeVerified(true);
+              }}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Continue
+            </button>
+          </section>
+        )}
+
+        {ageVerified && step === 'camera' && (
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold">{t('step1.title')}</h2>
             <p className="mb-4 text-sm text-slate-600">{t('step1.hint')}</p>

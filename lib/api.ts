@@ -36,6 +36,18 @@ export async function getCertificate(accessToken: string, id: string) {
   return res.json();
 }
 
+export async function deleteCertificate(accessToken: string, id: string) {
+  const res = await fetch(`${API_URL}/api/certificates/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || res.statusText);
+  }
+  return res.json();
+}
+
 export async function verifyCertificate(cert: {
   inquiryId: string;
   measurement: { lengthCm: number; ppm: number; timestamp: number; liveCaptured: boolean };
