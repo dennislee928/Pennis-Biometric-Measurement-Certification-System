@@ -290,3 +290,81 @@ export function getBlurScore(imageData: ImageData): number {
   }
   return count > 0 ? sum / count : 0;
 }
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function invert3x3(m: number[]): number[] | null {
+  const [a, b, c, d, e, f, g, h, i] = m;
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-10) return null;
+  const invDet = 1 / det;
+  return [
+    (e * i - f * h) * invDet,
+    (c * h - b * i) * invDet,
+    (b * f - c * e) * invDet,
+    (f * g - d * i) * invDet,
+    (a * i - c * g) * invDet,
+    (c * d - a * f) * invDet,
+    (d * h - e * g) * invDet,
+    (b * g - a * h) * invDet,
+    (a * e - b * d) * invDet,
+  ];
+}
+
+export function perspectiveWarp(
+  imageData: ImageData,
+  srcCorners: [Point2D, Point2D, Point2D, Point2D],
+  dstWidth?: number,
+  dstHeight?: number
+): ImageData {
+  const passportAspect = 125 / 88;
+  const dw = dstWidth ?? Math.min(imageData.width, 400);
+  const dh = dstHeight ?? Math.round(dw * passportAspect);
+
+  const matrix = buildPerspectiveMatrix(srcCorners, dw, dh);
+  if (matrix.length === 0) return new ImageData(dw, dh);
+
+  const inv = invert3x3(matrix);
+  if (!inv) return new ImageData(dw, dh);
+
+  const src = imageData.data;
+  const sw = imageData.width;
+  const sh = imageData.height;
+  const dstImageData = new ImageData(dw, dh);
+  const dst = dstImageData.data;
+
+  for (let y = 0; y < dh; y++) {
+    for (let x = 0; x < dw; x++) {
+      const w = inv[6] * x + inv[7] * y + inv[8];
+      if (Math.abs(w) < 1e-10) continue;
+      const sx = (inv[0] * x + inv[1] * y + inv[2]) / w;
+      const sy = (inv[3] * x + inv[4] * y + inv[5]) / w;
+
+      const ix = Math.floor(sx);
+      const iy = Math.floor(sy);
+      if (ix < 0 || ix >= sw - 1 || iy < 0 || iy >= sh - 1) continue;
+
+      const fx = sx - ix;
+      const fy = sy - iy;
+      const si = (iy * sw + ix) * 4;
+      const di = (y * dw + x) * 4;
+
+      for (let c = 0; c < 4; c++) {
+        const p00 = src[si + c];
+        const p10 = src[si + 4 + c];
+        const p01 = src[si + sw * 4 + c];
+        const p11 = src[si + sw * 4 + 4 + c];
+        dst[di + c] = Math.round(
+          (1 - fx) * (1 - fy) * p00 +
+          fx * (1 - fy) * p10 +
+          (1 - fx) * fy * p01 +
+          fx * fy * p11
+        );
+      }
+    }
+  }
+
+  return dstImageData;
+}

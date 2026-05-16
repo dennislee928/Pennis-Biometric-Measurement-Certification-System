@@ -7,9 +7,13 @@ import {
   computePPMFromPassport,
   getMeasurementRoi,
   measureLengthFromRegion,
+  perspectiveWarp,
+  sleep,
   type MeasurementResult,
   type Point2D,
 } from '@/lib/measurementEngine';
+import { detectPassportCorners } from '@/lib/passportDetector';
+import { runSegmentation } from '@/lib/segmentationModel';
 import { downloadCertificateAsJson, type CertificatePayload } from '@/lib/certificationProvider';
 import { downloadCertificatePng } from '@/lib/certificateImage';
 import { generateCertificatePdf } from '@/lib/certificatePdf';
@@ -39,13 +43,76 @@ function getPassportCornersFromOverlay(videoWidth: number, videoHeight: number):
   ];
 }
 
-function runMeasurement(imageData: ImageData, liveCaptured: boolean): MeasurementResult | null {
+async function runMeasurement(
+  imageData: ImageData,
+  liveCaptured: boolean,
+  captureAdditionalFrame?: () => ImageData | null
+): Promise<MeasurementResult | null> {
   const { width, height } = imageData;
-  const corners = getPassportCornersFromOverlay(width, height);
-  const ppm = computePPMFromPassport(corners);
-  if (ppm <= 0) return null;
+
+  const refW = width * REFERENCE_FRAME_WIDTH_RATIO;
+  const refLeft = (width - refW) / 2;
+  const refTop = height * 0.15;
+  const refH = refW * PASSPORT_ASPECT;
+  const searchRegion = {
+    left: Math.floor(refLeft),
+    top: Math.floor(refTop),
+    width: Math.floor(refW),
+    height: Math.floor(refH),
+  };
+
+  const passport = detectPassportCorners(imageData, searchRegion);
+
+  if (passport && passport.confidence > 0.5) {
+    const ppm = computePPMFromPassport(passport.corners);
+
+    if (ppm > 0) {
+      const frames: ImageData[] = [imageData];
+      for (let i = 0; i < 4; i++) {
+        await sleep(100);
+        const frame = captureAdditionalFrame?.();
+        if (frame) frames.push(frame);
+      }
+
+      const lengths: number[] = [];
+      for (const frame of frames) {
+        const warped = perspectiveWarp(frame, passport.corners);
+        const roi = getMeasurementRoi(warped);
+        const seg = await runSegmentation(roi);
+        if (seg.objectFound) {
+          const lengthCm = (seg.bottomY - seg.topY) / ppm;
+          lengths.push(lengthCm);
+        }
+      }
+
+      if (lengths.length >= 3) {
+        lengths.sort((a, b) => a - b);
+        lengths.shift();
+        lengths.pop();
+        const avg = lengths.reduce((s, v) => s + v, 0) / lengths.length;
+        const std = Math.sqrt(lengths.reduce((s, v) => s + (v - avg) ** 2, 0) / lengths.length);
+
+        if (std > 0.5) {
+          console.warn('Measurement unstable, std > 0.5cm');
+          return null;
+        }
+
+        return {
+          lengthCm: avg,
+          ppm,
+          timestamp: Date.now(),
+          liveCaptured,
+        };
+      }
+    }
+  }
+
+  console.warn('No passport detected, using fallback measurement');
+  const fallbackCorners = getPassportCornersFromOverlay(width, height);
+  const fallbackPpm = computePPMFromPassport(fallbackCorners);
+  if (fallbackPpm <= 0) return null;
   const targetRegionHeightPx = height * 0.35;
-  return measureLengthFromRegion(targetRegionHeightPx, ppm, liveCaptured);
+  return measureLengthFromRegion(targetRegionHeightPx, fallbackPpm, liveCaptured);
 }
 
 function roiImageDataToPngBlob(roi: ImageData): Promise<Blob> {
@@ -77,8 +144,6 @@ export default function MeasurePage() {
   const [certificate, setCertificate] = useState<CertificatePayload | null>(null);
   const [inquiryId, setInquiryId] = useState<string | null>(null);
   const [holderName, setHolderName] = useState('');
-  const [pngDownloaded, setPngDownloaded] = useState(false);
-  const [pdfDownloaded, setPdfDownloaded] = useState(false);
   const [collectionConsent, setCollectionConsent] = useState(false);
   const [collectionSending, setCollectionSending] = useState(false);
   const [collectionError, setCollectionError] = useState<string | null>(null);
@@ -89,13 +154,26 @@ export default function MeasurePage() {
     initTfBackend().catch(() => {});
   }, []);
 
-  const handleCapture = useCallback((imageData: ImageData, live: boolean) => {
+  const handleCapture = useCallback(async (imageData: ImageData, live: boolean) => {
     lastCapturedRef.current = new ImageData(
       new Uint8ClampedArray(imageData.data),
       imageData.width,
       imageData.height
     );
-    const result = runMeasurement(imageData, live);
+
+    const tempCanvas = document.createElement('canvas');
+    const videoEl = document.querySelector('video');
+    const captureFrame = (): ImageData | null => {
+      if (!videoEl || videoEl.readyState < 2) return null;
+      tempCanvas.width = videoEl.videoWidth;
+      tempCanvas.height = videoEl.videoHeight;
+      const ctx = tempCanvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(videoEl, 0, 0);
+      return ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    };
+
+    const result = await runMeasurement(imageData, live, captureFrame);
     if (result) {
       setMeasurement(result);
       setStep('measure');
@@ -150,13 +228,11 @@ export default function MeasurePage() {
   const handleDownloadPng = useCallback(() => {
     if (!certData) return;
     downloadCertificatePng(certData, locale);
-    setPngDownloaded(true);
   }, [certData, locale]);
 
   const handleDownloadPdf = useCallback(() => {
     if (!certData) return;
     generateCertificatePdf(certData, locale);
-    setPdfDownloaded(true);
   }, [certData, locale]);
 
   const handleSubmitCollection = useCallback(
@@ -277,39 +353,6 @@ export default function MeasurePage() {
               </p>
             </div>
 
-            <div className="mb-4 border-t border-slate-200 pt-4">
-              <h3 className="mb-3 text-sm font-semibold text-slate-800">{t('step2.certSectionTitle')}</h3>
-              <label htmlFor="step2-holder-name" className="mb-1 block text-sm font-medium text-slate-700">
-                {t('step4.holderName')}
-              </label>
-              <input
-                id="step2-holder-name"
-                type="text"
-                value={holderName}
-                onChange={(e) => setHolderName(e.target.value)}
-                placeholder={t('step4.holderNamePlaceholder')}
-                className="mb-4 w-full rounded border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-              />
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={handleDownloadPng}
-                  className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-800"
-                >
-                  <Download className="h-4 w-4" />
-                  {t('step4.downloadPng')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDownloadPdf}
-                  className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-800"
-                >
-                  <Download className="h-4 w-4" />
-                  {t('step4.downloadPdf')}
-                </button>
-              </div>
-            </div>
-
             {/* 資料收集（選填）：參與改進辨識模型 */}
             <div className="mb-4 border-t border-slate-200 pt-4">
               <h3 className="mb-2 text-sm font-semibold text-slate-800">協助改進辨識（選填）</h3>
@@ -426,20 +469,18 @@ export default function MeasurePage() {
               <button
                 type="button"
                 onClick={handleDownloadPng}
-                disabled={pngDownloaded}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-white hover:bg-slate-800"
               >
                 <Download className="h-4 w-4" />
-                {pngDownloaded ? t('step4.downloaded') : t('step4.downloadPng')}
+                {t('step4.downloadPng')}
               </button>
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                disabled={pdfDownloaded}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-white hover:bg-slate-800"
               >
                 <Download className="h-4 w-4" />
-                {pdfDownloaded ? t('step4.downloaded') : t('step4.downloadPdf')}
+                {t('step4.downloadPdf')}
               </button>
             </div>
             {accessToken ? (
