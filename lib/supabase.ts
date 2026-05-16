@@ -1,14 +1,13 @@
+import { createClient } from '@supabase/supabase-js';
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
-let clientPromise: Promise<ReturnType<typeof import('@supabase/supabase-js').createClient>> | null = null;
+let client: ReturnType<typeof createClient> | null = null;
 
-export async function getSupabase() {
-  if (!clientPromise) {
-    clientPromise = (async () => {
-      const { createClient } = await import('@supabase/supabase-js');
-      return createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');
-    })();
+export function getSupabase() {
+  if (!client) {
+    client = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');
   }
-  return clientPromise;
+  return client;
 }
