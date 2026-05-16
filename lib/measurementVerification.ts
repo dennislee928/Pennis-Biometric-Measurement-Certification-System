@@ -37,10 +37,10 @@ export async function runRecognitionModelInWorker(roiImageData: ImageData): Prom
     return runRecognitionModel(roiImageData);
   }
 
-  const worker = inferenceWorker;
+  const worker = inferenceWorker!;
   return new Promise((resolve) => {
     const handler = (e: MessageEvent) => {
-      worker!.removeEventListener('message', handler);
+      worker.removeEventListener('message', handler);
       if (e.data.error) {
         console.error('Worker inference error:', e.data.error);
         resolve(runRecognitionModel(roiImageData));
@@ -48,10 +48,10 @@ export async function runRecognitionModelInWorker(roiImageData: ImageData): Prom
       }
       resolve(e.data.result as RecognitionResult);
     };
-    worker!.addEventListener('message', handler);
-    inferenceWorker.postMessage({ imageData: roiImageData, type: 'recognition' }, [roiImageData.data.buffer]);
+    worker.addEventListener('message', handler);
+    worker.postMessage({ imageData: roiImageData, type: 'recognition' }, [roiImageData.data.buffer]);
     setTimeout(() => {
-      inferenceWorker.removeEventListener('message', handler);
+      worker.removeEventListener('message', handler);
       resolve(runRecognitionModel(roiImageData));
     }, 10000);
   });

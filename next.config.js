@@ -1,5 +1,3 @@
-const path = require('path');
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -14,10 +12,6 @@ const nextConfig = {
       fs: false, path: false, crypto: false, tls: false,
       net: false, stream: false, http: false, https: false,
       zlib: false,
-    };
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      'tslib': path.resolve(__dirname, 'node_modules/tslib/tslib.js'),
     };
     return config;
   },

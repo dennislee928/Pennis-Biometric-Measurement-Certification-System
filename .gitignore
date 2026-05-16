@@ -3,6 +3,4 @@ node_modules/
 *.tsbuildinfo
 .env.local
 out/
-/node_modules
-/node_modules
-/node_modules
+lib/stubs/
