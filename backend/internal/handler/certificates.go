@@ -71,6 +71,11 @@ func IssueCertificate(hmacSecret string, db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		if err := validateMeasurement(req.Measurement); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		var inquiry model.Inquiry
 		if err := db.Where("inquiry_id = ? AND status = ?", req.InquiryID, "approved").First(&inquiry).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {

@@ -73,7 +73,7 @@ export function generateCertificatePng(data: CertificateImageData, locale: Local
   ctx.font = 'bold 72px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Dick Size Verified', W / 2, H / 2);
+  ctx.fillText(dict['cert.watermark'] ?? 'Dick Size Verified', W / 2, H / 2);
   ctx.restore();
 
   // Title area with underline
