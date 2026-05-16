@@ -46,12 +46,17 @@ func AuthJWT(jwtSecret string) gin.HandlerFunc {
 }
 
 func CORS(origin string) gin.HandlerFunc {
-	allowed := make(map[string]bool)
-	for _, o := range strings.Split(origin, ",") {
-		o = strings.TrimSpace(o)
-		if o != "" {
-			allowed[o] = true
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
 		}
+		c.Next()
+	}
+}
 	}
 	return func(c *gin.Context) {
 		reqOrigin := c.Request.Header.Get("Origin")
